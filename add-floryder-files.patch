@@ -1,0 +1,252 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Copilot <copilot@example.com>
+Date: Wed, 07 Jan 2026 00:00:00 +0000
+Subject: [PATCH] Add architecture docs, API spec, SQL schema, pick engine prototype, and CI/Docker scaffolding
+
+---
+ ARCHITECTURE.md                        |  33 ++++++++++++++++++++++
+ API_SPEC.md                            |  33 ++++++++++++++++++++++
+ DATA_MODELS.sql                        |  25 +++++++++++++++
+ Dockerfile                             |   6 ++++
+ README.md                              |  22 +++++++++++++
+ .github/workflows/ci.yml               |  28 ++++++++++++++++++
+ .gitignore                             |   5 ++++
+ pick_logic_sample.py                   |  48 ++++++++++++++++++++++++++++++++++++++
+ src/__init__.py                        |   1 +
+ tests/test_pick_logic.py               |  11 ++++++
+ 11 files changed, 225 insertions(+)
+ create mode 100644 ARCHITECTURE.md
+ create mode 100644 API_SPEC.md
+ create mode 100644 DATA_MODELS.sql
+ create mode 100644 Dockerfile
+ create mode 100644 README.md
+ create mode 100644 .github/workflows/ci.yml
+ create mode 100644 .gitignore
+ create mode 100644 pick_logic_sample.py
+ create mode 100644 src/__init__.py
+ create mode 100644 tests/test_pick_logic.py
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -0,0 +1,33 @@
++# Floryder — Architecture (MVP)
++
++Overview:
++- SPA frontend (React)
++- Backend service (Python/Node) exposing REST endpoints
++- Redis cache + lightweight DB (SQLite/Postgres)
++- External APIs: balldontlie, API-NBA (RapidAPI), DraftKings snapshot
++
++Components:
++- Fetchers (stat, lineup, lines)
++- Candidate generator
++- Risk filters (Safe/Normal/Moonshot)
++- Confidence scorer
++- Parlay assembler
++- Backtester & Monte Carlo simulator
++- Caching layer & rate limiter
++- Monitoring & logging
++
++Caching TTLs:
++- player_stats: 15m
++- team_defense: 2h
++- lineup: 5m
++- parlay_response: 60s
++- backtest_result: 15m
+--- a/API_SPEC.md
++++ b/API_SPEC.md
+@@ -0,0 +1,33 @@
++# API Spec (MVP)
++
++POST /generate-parlay
++- Request body (JSON):
++  - risk: "safe" | "normal" | "moonshot"
++  - legs: integer 1..8
++  - statFocus: "PTS" | "REB" | "AST" (optional)
++  - venueSensitivity: boolean (optional)
++  - maxOddsPerLeg: integer (optional)
++
++- Response: JSON with parlay summary and legs. Example leg object:
++```
++{
++  "player": {"id": 123, "name": "Jalen Brunson", "team": "NYK"},
++  "market": "PTS",
++  "line": 21.5,
++  "odds": -105,
++  "projection": 24.8,
++  "confidence": 82,
++  "hit_rate": {"hits":14,"games":25},
++  "why": ["..."]
++}
++```
++
++GET /player/:id
++- Returns player stats, last N games (with X / Y values), lineup status, and team defense summary.
++
++GET /backtest?playerId=&stat=&games=25
++- Returns X / 25 and related metadata used for the backtesting section.
++
++Notes:
++- All hit rates should be shown as "X / Y" per product spec.
++- Responses should include a timestamp and cache TTL when relevant.
+--- a/DATA_MODELS.sql
++++ b/DATA_MODELS.sql
+@@ -0,0 +1,25 @@
++-- Minimal SQL schema for MVP
++CREATE TABLE players (
++  id INTEGER PRIMARY KEY,
++  name TEXT,
++  team TEXT,
++  pos TEXT,
++  last_updated TIMESTAMP
++);
++CREATE TABLE games (
++  id INTEGER PRIMARY KEY,
++  date DATE,
++  home_team TEXT,
++  away_team TEXT
++);
++CREATE TABLE player_game_logs (
++  id INTEGER PRIMARY KEY,
++  player_id INTEGER,
++  game_id INTEGER,
++  pts REAL,
++  reb REAL,
++  ast REAL,
++  usage REAL,
++  minutes REAL,
++  lineup_flag BOOLEAN,
++  FOREIGN KEY(player_id) REFERENCES players(id)
++);
++CREATE TABLE draftkings_lines (
++  id INTEGER PRIMARY KEY,
++  game_id INTEGER,
++  player_id INTEGER,
++  market TEXT,
++  line REAL,
++  odds INTEGER,
++  snapshot_ts TIMESTAMP
++);
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -0,0 +1,6 @@
++# Simple Python service container for Floryder prototype
++FROM python:3.11-slim
++WORKDIR /app
++COPY . /app
++RUN pip install --upgrade pip && pip install -r requirements.txt || true
++CMD ["python", "pick_logic_sample.py"]
+--- a/README.md
++++ b/README.md
+@@ -0,0 +1,22 @@
++# Floryder3.0 (MVP)
++
++This PR seeds the repository with the initial architecture docs, API spec, SQL schema, a small pick engine prototype, and basic CI/Docker scaffolding.
++
++Files included:
++- ARCHITECTURE.md
++- API_SPEC.md
++- DATA_MODELS.sql
++- pick_logic_sample.py
++- README.md
++- .github/workflows/ci.yml
++- Dockerfile
++- .gitignore
++- src/__init__.py
++- tests/test_pick_logic.py
++
++Next steps:
++- Implement backend fetchers and caching
++- Implement /generate-parlay endpoint
++- Build frontend SPA
++
++See ARCHITECTURE.md and API_SPEC.md for design details.
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,28 @@
++name: CI
++on:
++  push:
++    branches: [ main, master ]
++  pull_request:
++    branches: [ main, master ]
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - name: Set up Python
++        uses: actions/setup-python@v4
++        with:
++          python-version: '3.11'
++      - name: Install dependencies
++        run: |
++          python -m pip install --upgrade pip
++          pip install pytest
++      - name: Run tests
++        run: |
++          pytest -q
+--- a/.gitignore
++++ b/.gitignore
+@@ -0,0 +1,5 @@
++__pycache__/
++.env
++.env.*
++venv/
++.DS_Store
+--- a/pick_logic_sample.py
++++ b/pick_logic_sample.py
+@@ -0,0 +1,48 @@
++# Sample pick selection prototype for Floryder (MVP)
++from typing import List, Dict
++import math
++
++WEIGHTS = {'recent':0.30,'matchup':0.20,'line':0.25,'usage':0.15,'venue':0.10}
++
++def logistic(x: float) -> float:
++    return 1 / (1 + math.exp(-x))
++
++def confidence_score(proj: float, line: float, recent_form: float, matchup_rank: int, usage_change: float, venue_score: float) -> int:
++    \"\"\"Return confidence 0-100
++
++    - proj: projected stat (e.g., points)
++    - line: sportsbook line
++    - recent_form: last-5 average
++    - matchup_rank: defensive rank where 1 is best defense
++    - usage_change: fractional change in usage (e.g., 0.05 for +5%)
++    - venue_score: 0..1 favorability
++    \"\"\"
++    line_delta = proj - line
++    # map deltas into 0..1 using logistic with a scale param
++    line_score = logistic(line_delta / 2.0)
++    recent_score = max(0.0, min(1.0, (recent_form - line) / 10.0 + 0.5))
++    matchup_score = max(0.0, min(1.0, 1 - (matchup_rank / 30.0)))
++    usage_score = max(0.0, min(1.0, usage_change / 0.15 + 0.5))
++
++    combined = (
++        WEIGHTS['recent'] * recent_score +
++        WEIGHTS['matchup'] * matchup_score +
++        WEIGHTS['line'] * line_score +
++        WEIGHTS['usage'] * usage_score +
++        WEIGHTS['venue'] * venue_score
++    )
++    return int(round(combined * 100))
++
++# Example usage
++if __name__ == '__main__':
++    conf = confidence_score(24.8, 21.5, recent_form=24.8, matchup_rank=12, usage_change=0.05, venue_score=0.5)
++    print(f"Confidence: {conf}%")
+--- a/src/__init__.py
++++ b/src/__init__.py
+@@ -0,0 +1 @@
++# Floryder3.0 source placeholder
+--- a/tests/test_pick_logic.py
++++ b/tests/test_pick_logic.py
+@@ -0,0 +1,11 @@
++from pick_logic_sample import confidence_score
++
++def test_confidence_range():
++    conf = confidence_score(25.0, 20.0, recent_form=24.0, matchup_rank=10, usage_change=0.05, venue_score=0.5)
++    assert 0 <= conf <= 100
++
+-- 
+2.34.1
